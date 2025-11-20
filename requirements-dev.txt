@@ -1,0 +1,4 @@
+# ---- Dev-only tools (not needed by end users) ----
+pyinstaller>=6.0,<7.0   # Build .exe / mac app
+# black>=24.0           # Code formatter
+# flake8>=7.0           # Linting

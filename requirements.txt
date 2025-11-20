@@ -1,0 +1,8 @@
+# ---- Runtime deps for InvoiceMint ----
+customtkinter>=5.2.0,<6.0
+darkdetect>=0.8.0,<1.0
+
+# (Enable when you add these features)
+# reportlab>=4.0,<5.0     # PDF export
+# jinja2>=3.1,<4.0        # HTML templating for invoices
+# python-docx>=1.1,<2.0   # Optional DOCX export
