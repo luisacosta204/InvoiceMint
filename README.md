@@ -115,7 +115,13 @@ git push
 # On other machine
 git pull
 ```
+## Quick Push to GitHub
+Use the helper script to commit and push all recent changes in one step:
 
+```bash
+python quickpush.py "Describe your update"
+# or (macOS/Linux)
+./quickpush.py "Describe your update"
 ---
 
 ## Coming Soon
