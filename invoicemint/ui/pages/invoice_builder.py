@@ -61,6 +61,22 @@ class InvoiceBuilder(ctk.CTkFrame):
         except Exception:
             return str(int((load_settings() or {}).get("invoice_seq", 1001)) + 1)
 
+    # ---------- small UI helpers ----------
+    def _center_and_modal(self, win: tk.Toplevel, w=460, h=360):
+        """Center child over parent and keep it modal/ontop."""
+        self.update_idletasks()
+        try:
+            x = self.winfo_rootx() + (self.winfo_width() - w) // 2
+            y = self.winfo_rooty() + (self.winfo_height() - h) // 2
+        except Exception:
+            x = self.winfo_rootx() + 80
+            y = self.winfo_rooty() + 80
+        win.geometry(f"{w}x{h}+{max(0,x)}+{max(0,y)}")
+        win.transient(self.winfo_toplevel())
+        win.attributes("-topmost", True)
+        win.grab_set()
+        win.focus_set()
+
     # ---------- UI ----------
     def _build(self):
         self.grid_rowconfigure(5, weight=1)
@@ -322,24 +338,54 @@ class InvoiceBuilder(ctk.CTkFrame):
         if not self.rows: self.add_row()
         self.recompute()
 
+    # --- Save Draft (with name prompt; default = invoice number) ---
     def on_save(self):
-        path = save_draft(self.get_state(), None)
+        # Suggest good default
+        inv_no = (self.inv_no_var.get() or "").strip()
+        suggestion = inv_no if inv_no else datetime.now().strftime("invoice-%Y%m%d-%H%M%S")
+
+        # Ask for a name (CTkInputDialog)
+        dlg = ctk.CTkInputDialog(title="Save Draft", text=f"Draft name (Enter to confirm):")
+        name = dlg.get_input()
+        if name is None:
+            return
+        name = (name or suggestion).strip()
+
+        path = save_draft(self.get_state(), name)
+
         toast = ctk.CTkToplevel(self); toast.title("Saved")
         ctk.CTkLabel(toast, text=f"Saved draft:\n{path}").pack(padx=16, pady=16)
-        toast.geometry("+%d+%d" % (self.winfo_rootx()+120, self.winfo_rooty()+80))
+        self._center_and_modal(toast, w=360, h=140)
         toast.after(1600, toast.destroy)
 
+    # --- Load Draft (modal / always on top) ---
     def on_load(self):
         drafts = list_drafts()
-        if not drafts: return
-        win = ctk.CTkToplevel(self); win.title("Open Draft"); win.geometry("420x320")
-        frame = ctk.CTkScrollableFrame(win); frame.pack(fill="both", expand=True, padx=12, pady=12)
+        if not drafts:
+            toast = ctk.CTkToplevel(self); toast.title("No drafts")
+            ctk.CTkLabel(toast, text="No drafts saved yet.").pack(padx=16, pady=16)
+            self._center_and_modal(toast, w=260, h=120)
+            toast.after(1400, toast.destroy)
+            return
+
+        drafts = sorted(drafts, key=lambda d: d.get("mtime", 0), reverse=True)
+
+        win = ctk.CTkToplevel(self); win.title("Open Draft")
+        self._center_and_modal(win, w=460, h=360)
+
+        frame = ctk.CTkScrollableFrame(win)
+        frame.pack(fill="both", expand=True, padx=12, pady=12)
+
         for d in drafts:
             row = ctk.CTkFrame(frame, corner_radius=8); row.pack(fill="x", padx=4, pady=6)
             ctk.CTkLabel(row, text=d["name"]).pack(side="left", padx=10, pady=10)
-            ctk.CTkButton(row, text="Open", width=80,
-                          command=lambda p=d["path"]: (self.load_from_path(p), win.destroy())
-                          ).pack(side="right", padx=8, pady=8)
+            ctk.CTkButton(
+                row, text="Open", width=80,
+                command=lambda p=d["path"]: (self.load_from_path(p), win.destroy())
+            ).pack(side="right", padx=8, pady=8)
+
+        # Optional: freeze parent completely until close
+        # win.wait_window()
 
     def load_from_path(self, path):
         state = load_draft(path)
@@ -369,5 +415,5 @@ class InvoiceBuilder(ctk.CTkFrame):
 
         toast = ctk.CTkToplevel(self); toast.title("Exported")
         ctk.CTkLabel(toast, text=f"Saved: {path}").pack(padx=16, pady=16)
-        toast.geometry("+%d+%d" % (self.winfo_rootx()+120, self.winfo_rooty()+80))
+        self._center_and_modal(toast, w=380, h=140)
         toast.after(1600, toast.destroy)
