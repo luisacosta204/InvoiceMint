@@ -103,3 +103,23 @@ def save_draft(data: dict, name: str | None = None) -> Path:
 def load_draft(path: str | Path) -> dict:
     """Load a draft JSON by path (string or Path)."""
     return _read_json(Path(path), {})
+
+# --- Draft maintenance (rename / delete) ---
+def delete_draft(path: str | Path) -> bool:
+    try:
+        Path(path).unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+def rename_draft(path: str | Path, new_name: str) -> Path | None:
+    """Rename a draft to <slug>.json, ensuring uniqueness. Returns new path or None on error."""
+    try:
+        p = Path(path)
+        slug = slugify(new_name)
+        target = p.with_name(f"{slug}.json")
+        target = next_available_filename(target)
+        p.rename(target)
+        return target
+    except Exception:
+        return None

@@ -5,6 +5,7 @@ from invoicemint.ui.pages.clients import ClientsPage
 from invoicemint.ui.pages.templates import TemplatesPage
 from invoicemint.ui.pages.settings import SettingsPage
 from invoicemint.services.storage import load_settings, save_settings, list_drafts, load_draft
+from invoicemint.ui.pages.history import DraftsHistory
 
 
 class MainApp(ctk.CTk):  # App window
@@ -68,6 +69,7 @@ class MainApp(ctk.CTk):  # App window
             ("Dashboard", "invoice"),
             ("Clients", "clients"),
             ("Templates", "templates"),
+            ("Drafts / History", "history"),   # <-- added
             ("Settings", "settings"),
         ]:
             btn = ctk.CTkButton(self.sidebar, text=label, corner_radius=10, anchor="w",
@@ -114,6 +116,12 @@ class MainApp(ctk.CTk):  # App window
         if hasattr(self.current_page, "load_from_path"):
             self.current_page.load_from_path(path)
 
+    def _open_state_in_invoice(self, state_dict: dict):
+        """Callback for DraftsHistory: show invoice page and load given state."""
+        self.show_page("invoice")
+        if hasattr(self.current_page, "set_state"):
+            self.current_page.set_state(state_dict)
+
     def show_page(self, key: str):
         if self.current_page is not None:
             self.current_page.destroy()
@@ -124,6 +132,9 @@ class MainApp(ctk.CTk):  # App window
             self.current_page = ClientsPage(self.content)
         elif key == "templates":
             self.current_page = TemplatesPage(self.content)
+        elif key == "history":
+            # Pass a callback so the history page can load into the builder
+            self.current_page = DraftsHistory(self.content, on_open_state=self._open_state_in_invoice)
         elif key == "settings":
             self.current_page = SettingsPage(self.content)
         else:
