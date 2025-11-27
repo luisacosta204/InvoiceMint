@@ -4,6 +4,10 @@ from customtkinter import CTkInputDialog
 import tkinter as tk
 from tkinter import filedialog
 from datetime import datetime, timedelta
+import os
+import sys
+import tempfile
+import subprocess
 
 from invoicemint.services.storage import (
     save_draft, load_draft, list_drafts, load_settings, save_settings, load_clients,
@@ -48,6 +52,7 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.inv_date_var = tk.StringVar(value=_today_str())
         self.due_date_var = tk.StringVar(value=_add_days(_today_str(), 14))
         self.terms_var = tk.StringVar(value="Net 14")
+        self.status_var = tk.StringVar(value="No watermark")  # default status
 
         self._init_invoice_number()
         self._build()
@@ -123,6 +128,18 @@ class InvoiceBuilder(ctk.CTkFrame):
             meta, textvariable=self.due_date_var, width=110, placeholder_text="YYYY-MM-DD"
         ).grid(row=0, column=8, padx=(0, 10), pady=6)
 
+        # Status row under invoice number
+        ctk.CTkLabel(meta, text="Status").grid(
+            row=1, column=0, padx=(10, 6), pady=6, sticky="e"
+        )
+        self.status_menu = ctk.CTkOptionMenu(
+            meta,
+            values=["UNPAID", "PAID", "OVERDUE", "No watermark"],
+            variable=self.status_var,
+            width=140,
+        )
+        self.status_menu.grid(row=1, column=1, padx=(0, 8), pady=6, sticky="w")
+
         top.grid_columnconfigure(4, weight=1)  # spacer so meta stays right
 
         # Editable client card (for this invoice only)
@@ -154,6 +171,9 @@ class InvoiceBuilder(ctk.CTkFrame):
         ).pack(side="left", padx=6, pady=8)
         ctk.CTkButton(footer, text="Load Draft", command=self.on_load).pack(
             side="left", padx=6, pady=8
+        )
+        ctk.CTkButton(footer, text="Preview PDF", command=self.on_preview_pdf).pack(
+            side="right", padx=6, pady=8
         )
         ctk.CTkButton(footer, text="Export PDF", command=self.on_export_pdf).pack(
             side="right", padx=6, pady=8
@@ -229,6 +249,18 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.client_vars["address"].set(client.get("address", ""))
         self.client_vars["email"].set(client.get("email", ""))
         self.client_vars["phone"].set(client.get("phone", ""))
+
+    def _open_file(self, path: str):
+        """Open a file with the default system viewer."""
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            print(f"Could not open file {path!r}: {exc}")
 
     def _reload_clients(self, *_):
         self.clients = load_clients() or []
@@ -363,6 +395,14 @@ class InvoiceBuilder(ctk.CTkFrame):
                     "tax_pct": float(tax.get() or 0),
                 }
             )
+
+        # Map "No watermark" UI choice to an empty status so PDFs show no status
+        raw_status = (self.status_var.get() or "").strip()
+        if raw_status.lower() == "no watermark":
+            status_value = ""
+        else:
+            status_value = raw_status
+
         return {
             "kind": "invoice",
             "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -372,6 +412,7 @@ class InvoiceBuilder(ctk.CTkFrame):
                 "date": self.inv_date_var.get().strip(),
                 "due_date": self.due_date_var.get().strip(),
                 "terms": self.terms_var.get().strip(),
+                "status": status_value,
             },
             "items": items,
             "totals": {
@@ -393,6 +434,18 @@ class InvoiceBuilder(ctk.CTkFrame):
             self.due_date_var.set(meta["due_date"])
         if "terms" in meta and meta["terms"] in TERMS_OPTIONS:
             self.terms_var.set(meta["terms"])
+
+        # status restore
+        stored_status = (meta.get("status") or "").strip()
+        if not stored_status:
+            # if empty in state, map back to "No watermark"
+            self.status_var.set("No watermark")
+        else:
+            # if it's one of our known options, use it; otherwise just display as-is
+            if stored_status in ["UNPAID", "PAID", "OVERDUE"]:
+                self.status_var.set(stored_status)
+            else:
+                self.status_var.set(stored_status)
 
         # client
         cli = state.get("client") or {}
@@ -499,6 +552,22 @@ class InvoiceBuilder(ctk.CTkFrame):
         state = load_draft(path)
         if state:
             self.set_state(state)
+
+    def on_preview_pdf(self):
+        """Render current invoice to a temporary PDF and open it."""
+        state = self.get_state()
+        settings = load_settings() or {}
+
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="InvoiceMint-preview-",
+            suffix=".pdf",
+            delete=False,
+        )
+        tmp_path = tmp.name
+        tmp.close()
+
+        generate_invoice_pdf(state, settings, tmp_path)
+        self._open_file(tmp_path)
 
     def on_export_pdf(self):
         state = self.get_state()

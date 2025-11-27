@@ -52,6 +52,30 @@ def _wrap_lines(text, font_name, font_size, max_width):
             lines.append(line)
     return lines or [""]
 
+# ---------- watermark helper ----------
+def _draw_status_watermark(c, status_text: str):
+    """
+    Draw a big, light diagonal watermark like PAID / UNPAID / OVERDUE
+    centered on the page. Only draws for those three statuses.
+    """
+    if not status_text:
+        return
+    text = str(status_text).upper()
+    if text not in {"PAID", "UNPAID", "OVERDUE"}:
+        return
+
+    PAGE_W, PAGE_H = A4
+    c.saveState()
+    try:
+        # very light gray; subtle but visible
+        c.setFillColor(colors.Color(0.9, 0.9, 0.9))
+        c.setFont("Helvetica-Bold", 72)
+        c.translate(PAGE_W / 2.0, PAGE_H / 2.0)
+        c.rotate(30)
+        c.drawCentredString(0, 0, text)
+    finally:
+        c.restoreState()
+
 # ---------- public entry ----------
 def generate_invoice_pdf(state: dict, settings: dict, out_path: str):
     """
@@ -72,7 +96,7 @@ def generate_invoice_pdf(state: dict, settings: dict, out_path: str):
         return _generate_invoice_pdf_modern(state, settings, out_path)
 
 # ============================================================
-# MODERN template implementation (your existing layout)
+# MODERN template implementation
 # ============================================================
 def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
     company = (settings or {}).get("company", {})
@@ -87,6 +111,10 @@ def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
     MARGIN = 18 * mm
     RIGHT_GUTTER = 18 * mm
     CONTENT_R = PAGE_W - MARGIN - RIGHT_GUTTER  # right margin alignment
+
+    # Status watermark on first page
+    status = (meta.get("status") or "").upper()
+    _draw_status_watermark(c, status)
 
     # ====== COLUMN RIGHT-EDGES (numeric columns) ======
     GAP     = 6 * mm      # base gap
@@ -150,11 +178,17 @@ def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
     y_right = PAGE_H - 40*mm
     _draw_text(c, right_x, y_right, f"{doc_title} Details", size=12, bold=True)
     y_right -= 16
-    for line in [
+
+    status_label = meta.get("status") or ""
+    lines = [
         f"Invoice #: {meta.get('number','')}",
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}" + (f"  ({meta.get('terms')})" if meta.get('terms') else ""),
-    ]:
+    ]
+    if status_label:
+        lines.append(f"Status: {status_label}")
+
+    for line in lines:
         _draw_text(c, right_x, y_right, line); y_right -= 12
 
     y_right -= 10
@@ -200,6 +234,9 @@ def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
         row_height = max(LINE_H, len(desc_lines) * LINE_H)
         if line_y - row_height < SAFE_FOOTER_Y:
             c.showPage()
+            # watermark on subsequent pages
+            _draw_status_watermark(c, status)
+
             _draw_text (c, X_SERVICE_L,  A4[1] - MARGIN - 12, "Service / Item", bold=True)
             _draw_text (c, X_DESC_L,     A4[1] - MARGIN - 12, "Description",    bold=True)
             _draw_rtext(c, X_QTY_R,      A4[1] - MARGIN - 12, "Qty",            bold=True)
@@ -258,6 +295,10 @@ def _generate_invoice_pdf_compact(state: dict, settings: dict, out_path: str):
     MARGIN = 16 * mm   # slightly smaller
     RIGHT_GUTTER = 16 * mm
     CONTENT_R = PAGE_W - MARGIN - RIGHT_GUTTER
+
+    # Status watermark on first page
+    status = (meta.get("status") or "").upper()
+    _draw_status_watermark(c, status)
 
     GAP     = 6 * mm
     TOTAL_W = 28 * mm
@@ -320,11 +361,17 @@ def _generate_invoice_pdf_compact(state: dict, settings: dict, out_path: str):
     y_right = PAGE_H - 36*mm
     _draw_text(c, right_x, y_right, f"{doc_title} Details", size=11, bold=True)
     y_right -= 14
-    for line in [
+
+    status_label = meta.get("status") or ""
+    lines = [
         f"Invoice #: {meta.get('number','')}",
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}" + (f"  ({meta.get('terms')})" if meta.get('terms') else ""),
-    ]:
+    ]
+    if status_label:
+        lines.append(f"Status: {status_label}")
+
+    for line in lines:
         _draw_text(c, right_x, y_right, line, size=9); y_right -= 11
 
     y_right -= 8
@@ -370,6 +417,9 @@ def _generate_invoice_pdf_compact(state: dict, settings: dict, out_path: str):
         row_height = max(LINE_H, len(desc_lines) * LINE_H)
         if line_y - row_height < SAFE_FOOTER_Y:
             c.showPage()
+            # watermark on subsequent pages
+            _draw_status_watermark(c, status)
+
             top_y = A4[1] - MARGIN - 10
             c.setFillColor(colors.HexColor("#374151"))
             _draw_text (c, X_SERVICE_L, top_y, "Service / Item", size=9, bold=True)
@@ -433,6 +483,10 @@ def _generate_invoice_pdf_minimal(state: dict, settings: dict, out_path: str):
     RIGHT_GUTTER = 20 * mm
     CONTENT_R = PAGE_W - MARGIN - RIGHT_GUTTER
 
+    # Status watermark on first page
+    status = (meta.get("status") or "").upper()
+    _draw_status_watermark(c, status)
+
     GAP     = 6 * mm
     TOTAL_W = 28 * mm
     TAX_W   = 12 * mm
@@ -484,11 +538,17 @@ def _generate_invoice_pdf_minimal(state: dict, settings: dict, out_path: str):
     title_y = PAGE_H - 22*mm
     _draw_rtext(c, CONTENT_R, title_y, doc_title.upper(), size=14, bold=True)
     y_meta = title_y - 14
-    for line in [
+
+    status_label = meta.get("status") or ""
+    meta_lines = [
         f"Invoice #: {meta.get('number','')}",
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}",
-    ]:
+    ]
+    if status_label:
+        meta_lines.append(f"Status: {status_label}")
+
+    for line in meta_lines:
         if line.strip().endswith(": "):
             continue
         _draw_rtext(c, CONTENT_R, y_meta, line, size=9); y_meta -= 11
@@ -549,6 +609,9 @@ def _generate_invoice_pdf_minimal(state: dict, settings: dict, out_path: str):
 
         if line_y - row_height < SAFE_FOOTER_Y:
             c.showPage()
+            # watermark on subsequent pages
+            _draw_status_watermark(c, status)
+
             top_y = A4[1] - MARGIN - 12
             c.setStrokeColor(colors.HexColor("#E5E7EB"))
             c.line(MARGIN, top_y + 4, PAGE_W - MARGIN, top_y + 4)
