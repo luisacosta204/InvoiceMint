@@ -1,6 +1,5 @@
 # invoicemint/services/storage.py
 import json
-import re
 from pathlib import Path
 from datetime import datetime
 
@@ -14,6 +13,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 for p in (APP_DIR, DATA_DIR, DRAFTS_DIR):
     p.mkdir(parents=True, exist_ok=True)
 
+
 # ---------- JSON helpers ----------
 def _read_json(path, default):
     if Path(path).exists():
@@ -23,25 +23,50 @@ def _read_json(path, default):
             return default
     return default
 
+
 def _write_json(path, data):
-    Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
 
 # ---------- Settings & Clients ----------
-DEFAULT_SETTINGS = {"theme": "light", "company": {}}
+DEFAULT_SETTINGS = {
+    "theme": "light",
+    "company": {},
+    "pdf": {
+        "template": "Minimal",  # default PDF template
+    },
+    "default_notes": "Thank you for your business!\nPayment is due in 14 days.",
+}
+
 
 def load_settings():
-    return _read_json(SETTINGS_FILE, DEFAULT_SETTINGS)
+    data = _read_json(SETTINGS_FILE, DEFAULT_SETTINGS)
+
+    # merge top-level
+    merged = DEFAULT_SETTINGS.copy()
+    merged.update(data or {})
+
+    # merge nested pdf dict
+    pdf_cfg = DEFAULT_SETTINGS.get("pdf", {}).copy()
+    pdf_cfg.update((data or {}).get("pdf", {}) or {})
+    merged["pdf"] = pdf_cfg
+
+    return merged
+
 
 def save_settings(data):
     if data is None:
         data = DEFAULT_SETTINGS
     _write_json(SETTINGS_FILE, data)
 
+
 def load_clients():
     return _read_json(CLIENTS_FILE, [])
 
+
 def save_clients(clients):
     _write_json(CLIENTS_FILE, clients or [])
+
 
 # ---------- Drafts API ----------
 def list_drafts():
@@ -51,7 +76,7 @@ def list_drafts():
         try:
             stat = p.stat()
             items.append({
-                "name": p.stem,
+                "name": p.name,
                 "path": str(p),
                 "mtime": stat.st_mtime,
             })
@@ -59,67 +84,69 @@ def list_drafts():
             continue
     return items
 
-# --- helpers for named saving ---
-_slug_re = re.compile(r"[^A-Za-z0-9._-]+")
-
-def slugify(name: str) -> str:
-    name = (name or "").strip()
-    if not name:
-        return "draft"
-    name = name.replace(" ", "-")
-    name = _slug_re.sub("", name)
-    return name[:80]
-
-def next_available_filename(base_path: Path) -> Path:
-    """If base_path exists, append -2, -3, ... until free."""
-    if not base_path.exists():
-        return base_path
-    stem, suffix, parent = base_path.stem, base_path.suffix, base_path.parent
-    i = 2
-    while True:
-        candidate = parent / f"{stem}-{i}{suffix}"
-        if not candidate.exists():
-            return candidate
-        i += 1
-
-def save_json_named(data: dict, name: str) -> Path:
-    """Save to drafts/<slug>.json (ensure unique)."""
-    slug = slugify(name)
-    path = DRAFTS_DIR / f"{slug}.json"
-    path = next_available_filename(path)
-    _write_json(path, data)
-    return path
 
 def save_draft(data: dict, name: str | None = None) -> Path:
     """Save a draft dict to the drafts directory and return its path."""
     if name:
-        return save_json_named(data, name)
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    filename = f"invoice-{ts}.json"
+        filename = name if name.endswith(".json") else f"{name}.json"
+    else:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"invoice-{ts}.json"
+
     path = DRAFTS_DIR / filename
     _write_json(path, data)
     return path
+
 
 def load_draft(path: str | Path) -> dict:
     """Load a draft JSON by path (string or Path)."""
     return _read_json(Path(path), {})
 
-# --- Draft maintenance (rename / delete) ---
-def delete_draft(path: str | Path) -> bool:
+
+def delete_draft(path_or_name: str) -> bool:
+    """
+    Delete a draft file by full path or just filename.
+    Returns True on success, False if file wasn't removed.
+    """
+    p = Path(path_or_name)
+    # If they passed just the filename, look in DRAFTS_DIR
+    if not p.is_absolute():
+        p = DRAFTS_DIR / p
+
     try:
-        Path(path).unlink(missing_ok=True)
-        return True
+        if p.exists():
+            p.unlink()
+            return True
     except Exception:
         return False
+    return False
 
-def rename_draft(path: str | Path, new_name: str) -> Path | None:
-    """Rename a draft to <slug>.json, ensuring uniqueness. Returns new path or None on error."""
+
+def rename_draft(path_or_name: str, new_name: str) -> Path | None:
+    """
+    Rename a draft file.
+
+    path_or_name: existing full path or filename
+    new_name: new base name (with or without .json)
+
+    Returns the new Path on success, or None on failure.
+    """
+    if not new_name:
+        return None
+
+    src = Path(path_or_name)
+    if not src.is_absolute():
+        src = DRAFTS_DIR / src
+
+    if not src.exists():
+        return None
+
+    # Ensure .json extension
+    filename = new_name if new_name.endswith(".json") else f"{new_name}.json"
+    dest = src.with_name(filename)
+
     try:
-        p = Path(path)
-        slug = slugify(new_name)
-        target = p.with_name(f"{slug}.json")
-        target = next_available_filename(target)
-        p.rename(target)
-        return target
+        src.rename(dest)
+        return dest
     except Exception:
         return None
