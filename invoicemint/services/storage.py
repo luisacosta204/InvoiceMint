@@ -35,8 +35,12 @@ DEFAULT_SETTINGS = {
     "pdf": {
         "template": "Minimal",  # default PDF template
     },
+    # Independent running numbers for invoices and quotes
+    "invoice_seq": 1000,
+    "quote_seq": 1000,
     "default_notes": "Thank you for your business!\nPayment is due in 14 days.",
 }
+
 
 
 def load_settings():
@@ -150,3 +154,62 @@ def rename_draft(path_or_name: str, new_name: str) -> Path | None:
         return dest
     except Exception:
         return None
+
+
+# ---------- Recent documents helper ----------
+def get_recent_documents(limit: int = 5):
+    """
+    Return a list of recent documents (drafts) sorted by last modified time
+    (newest first).
+
+    Each item looks like:
+    {
+        "id": "file_stem",
+        "filename": "file_name.json",
+        "client_name": "Client Name",
+        "doc_type": "invoice" or "quote",
+        "total": 123.45,
+        "date": "2025-12-01",
+        "modified": 1734300000.0  # epoch seconds
+    }
+    """
+    docs: list[dict] = []
+
+    if not DRAFTS_DIR.exists():
+        return docs
+
+    for path in DRAFTS_DIR.glob("*.json"):
+        try:
+            data = _read_json(path, {}) or {}
+
+            # Try to infer client name from common shapes
+            client_name = (
+                (data.get("client") or {}).get("name")  # nested client dict
+                or data.get("client_name")              # flat
+                or "Unknown client"
+            )
+
+            # Try a couple of common date keys
+            date = (
+                data.get("date")
+                or data.get("invoice_date")
+                or data.get("issue_date")
+            )
+
+            doc = {
+                "id": path.stem,
+                "filename": path.name,
+                "client_name": client_name,
+                "doc_type": data.get("doc_type", "invoice"),
+                "total": data.get("total_amount"),
+                "date": date,
+                "modified": path.stat().st_mtime,
+            }
+            docs.append(doc)
+        except Exception:
+            # Ignore corrupt or unreadable files
+            continue
+
+    # Newest first
+    docs.sort(key=lambda d: d["modified"], reverse=True)
+    return docs[:limit]

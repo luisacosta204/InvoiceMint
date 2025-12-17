@@ -102,7 +102,10 @@ def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
     company = (settings or {}).get("company", {})
     client  = (state or {}).get("client", {}) or {}
     meta    = (state or {}).get("meta", {}) or {}
-    doc_title = "Invoice" if state.get("kind") == "invoice" else "Quote"
+
+    # Use doc_type if present; fall back to kind/invoice
+    doc_type  = (state or {}).get("doc_type") or ("invoice" if state.get("kind") == "invoice" else "quote")
+    doc_title = "Quote" if str(doc_type).lower() == "quote" else "Invoice"
 
     c = canvas.Canvas(out_path, pagesize=A4)
     c.setTitle(doc_title)
@@ -181,7 +184,7 @@ def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
 
     status_label = meta.get("status") or ""
     lines = [
-        f"Invoice #: {meta.get('number','')}",
+        f"{doc_title} #: {meta.get('number','')}",
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}" + (f"  ({meta.get('terms')})" if meta.get('terms') else ""),
     ]
@@ -286,7 +289,9 @@ def _generate_invoice_pdf_compact(state: dict, settings: dict, out_path: str):
     company = (settings or {}).get("company", {})
     client  = (state or {}).get("client", {}) or {}
     meta    = (state or {}).get("meta", {}) or {}
-    doc_title = "Invoice" if state.get("kind") == "invoice" else "Quote"
+
+    doc_type  = (state or {}).get("doc_type") or ("invoice" if state.get("kind") == "invoice" else "quote")
+    doc_title = "Quote" if str(doc_type).lower() == "quote" else "Invoice"
 
     c = canvas.Canvas(out_path, pagesize=A4)
     c.setTitle(doc_title)
@@ -364,7 +369,7 @@ def _generate_invoice_pdf_compact(state: dict, settings: dict, out_path: str):
 
     status_label = meta.get("status") or ""
     lines = [
-        f"Invoice #: {meta.get('number','')}",
+        f"{doc_title} #: {meta.get('number','')}",
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}" + (f"  ({meta.get('terms')})" if meta.get('terms') else ""),
     ]
@@ -473,7 +478,9 @@ def _generate_invoice_pdf_minimal(state: dict, settings: dict, out_path: str):
     client  = (state or {}).get("client", {}) or {}
     meta    = (state or {}).get("meta", {}) or {}
     notes   = (state or {}).get("notes", "") or ""
-    doc_title = "Invoice" if state.get("kind") == "invoice" else "Quote"
+
+    doc_type  = (state or {}).get("doc_type") or ("invoice" if state.get("kind") == "invoice" else "quote")
+    doc_title = "Quote" if str(doc_type).lower() == "quote" else "Invoice"
 
     c = canvas.Canvas(out_path, pagesize=A4)
     c.setTitle(doc_title)
@@ -534,14 +541,14 @@ def _generate_invoice_pdf_minimal(state: dict, settings: dict, out_path: str):
             _draw_text(c, left_x, y_company, ln, size=9)
             y_company -= 11
 
-    # Right: big "INVOICE" title + meta
+    # Right: big title + meta
     title_y = PAGE_H - 22*mm
     _draw_rtext(c, CONTENT_R, title_y, doc_title.upper(), size=14, bold=True)
     y_meta = title_y - 14
 
     status_label = meta.get("status") or ""
     meta_lines = [
-        f"Invoice #: {meta.get('number','')}",
+        f"{doc_title} #: {meta.get('number','')}",
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}",
     ]

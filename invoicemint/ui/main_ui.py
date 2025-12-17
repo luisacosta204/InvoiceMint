@@ -6,6 +6,7 @@ from invoicemint.ui.pages.templates import TemplatesPage
 from invoicemint.ui.pages.settings import SettingsPage
 from invoicemint.services.storage import load_settings, save_settings, list_drafts, load_draft
 from invoicemint.ui.pages.history import DraftsHistory
+from invoicemint.ui.pages.dashboard import DashboardPage
 
 
 class MainApp(ctk.CTk):  # App window
@@ -35,7 +36,8 @@ class MainApp(ctk.CTk):  # App window
         self.content.grid_columnconfigure(0, weight=1)
 
         self.current_page = None
-        self.show_page("invoice")
+        # Start on dashboard instead of invoice
+        self.show_page("dashboard")
 
     # ---------- UI bits ----------
     def _build_topbar(self):
@@ -54,28 +56,44 @@ class MainApp(ctk.CTk):  # App window
         theme_btn = ctk.CTkButton(self.topbar, text="Toggle Theme", width=120, command=self.toggle_theme)
         theme_btn.pack(side="right", padx=8, pady=10)
 
-        new_quote = ctk.CTkButton(self.topbar, text="New Quote", width=110,
-                                  command=lambda: self.show_page("invoice"))
+        # New Quote / New Invoice now pass doc_type to the builder
+        new_quote = ctk.CTkButton(
+            self.topbar,
+            text="New Quote",
+            width=110,
+            command=lambda: self.show_page("invoice", doc_type="quote"),
+        )
         new_quote.pack(side="right", padx=8, pady=10)
 
-        new_invoice = ctk.CTkButton(self.topbar, text="New Invoice", width=110,
-                                    command=lambda: self.show_page("invoice"))
+        new_invoice = ctk.CTkButton(
+            self.topbar,
+            text="New Invoice",
+            width=110,
+            command=lambda: self.show_page("invoice", doc_type="invoice"),
+        )
         new_invoice.pack(side="right", padx=8, pady=10)
 
     def _build_sidebar(self):
         self.sidebar = ctk.CTkFrame(self, corner_radius=16)
         self.sidebar.grid(row=1, column=0, sticky="nsw", padx=(16, 8), pady=(0, 16))
         for label, key in [
-            ("Dashboard", "invoice"),
+            ("Dashboard", "dashboard"),   # <-- now actually points to dashboard
             ("Clients", "clients"),
             ("Templates", "templates"),
-            ("Drafts / History", "history"),   # <-- added
+            ("Drafts / History", "history"),
             ("Settings", "settings"),
         ]:
-            btn = ctk.CTkButton(self.sidebar, text=label, corner_radius=10, anchor="w",
-                                fg_color=("white", "#151a21"), text_color=("black", "white"),
-                                hover_color=("#e8eef7", "#222a34"), width=160,
-                                command=lambda k=key: self.show_page(k))
+            btn = ctk.CTkButton(
+                self.sidebar,
+                text=label,
+                corner_radius=10,
+                anchor="w",
+                fg_color=("white", "#151a21"),
+                text_color=("black", "white"),
+                hover_color=("#e8eef7", "#222a34"),
+                width=160,
+                command=lambda k=key: self.show_page(k),
+            )
             btn.pack(fill="x", padx=10, pady=6)
 
     # ---------- Behavior ----------
@@ -92,8 +110,11 @@ class MainApp(ctk.CTk):  # App window
             # small toast
             toast = ctk.CTkToplevel(self)
             toast.title("No drafts")
-            ctk.CTkLabel(toast, text="No saved drafts yet. Use “Save Draft” from Invoice page.").pack(padx=16, pady=16)
-            toast.geometry("+%d+%d" % (self.winfo_rootx()+120, self.winfo_rooty()+80))
+            ctk.CTkLabel(
+                toast,
+                text="No saved drafts yet. Use “Save Draft” from Invoice page.",
+            ).pack(padx=16, pady=16)
+            toast.geometry("+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80))
             toast.after(2000, toast.destroy)
             return
 
@@ -107,27 +128,47 @@ class MainApp(ctk.CTk):  # App window
             row = ctk.CTkFrame(frame, corner_radius=8)
             row.pack(fill="x", padx=4, pady=6)
             ctk.CTkLabel(row, text=d["name"]).pack(side="left", padx=10, pady=10)
-            ctk.CTkButton(row, text="Open", width=80,
-                          command=lambda p=d["path"]: self._open_draft_and_switch(p)).pack(side="right", padx=8, pady=8)
+            ctk.CTkButton(
+                row,
+                text="Open",
+                width=80,
+                command=lambda p=d["path"]: self._open_draft_and_switch(p),
+            ).pack(side="right", padx=8, pady=8)
 
     def _open_draft_and_switch(self, path):
-        # open in invoice page
-        self.show_page("invoice")
-        if hasattr(self.current_page, "load_from_path"):
+        """
+        Open a saved draft in the invoice/quote builder.
+        We first load the draft to inspect its doc_type, then open the correct mode.
+        """
+        state = load_draft(path) or {}
+        doc_type = state.get("doc_type", "invoice")
+
+        self.show_page("invoice", doc_type=doc_type)
+
+        # Prefer set_state if available; fallback to load_from_path
+        if hasattr(self.current_page, "set_state"):
+            self.current_page.set_state(state)
+        elif hasattr(self.current_page, "load_from_path"):
             self.current_page.load_from_path(path)
 
     def _open_state_in_invoice(self, state_dict: dict):
         """Callback for DraftsHistory: show invoice page and load given state."""
-        self.show_page("invoice")
+        doc_type = state_dict.get("doc_type", "invoice")
+        self.show_page("invoice", doc_type=doc_type)
         if hasattr(self.current_page, "set_state"):
             self.current_page.set_state(state_dict)
 
-    def show_page(self, key: str):
+    def show_page(self, key: str, doc_type: str | None = None):
         if self.current_page is not None:
             self.current_page.destroy()
 
-        if key == "invoice":
-            self.current_page = InvoiceBuilder(self.content)
+        if key == "dashboard":
+            # pass app=self so dashboard can navigate/open docs if it wants
+            self.current_page = DashboardPage(self.content, app=self)
+        elif key == "invoice":
+            # Pass doc_type down; default to "invoice"
+            dt = doc_type or "invoice"
+            self.current_page = InvoiceBuilder(self.content, doc_type=dt)
         elif key == "clients":
             self.current_page = ClientsPage(self.content)
         elif key == "templates":

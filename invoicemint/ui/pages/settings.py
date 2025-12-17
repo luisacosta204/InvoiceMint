@@ -27,6 +27,14 @@ class SettingsPage(ctk.CTkFrame):
             value=self.pdf_cfg.get("template", "Minimal")
         )
 
+        # New: separate sequences for invoices and quotes
+        self.invoice_seq_var = tk.StringVar(
+            value=str(self.settings.get("invoice_seq", 1000))
+        )
+        self.quote_seq_var = tk.StringVar(
+            value=str(self.settings.get("quote_seq", 1000))
+        )
+
         self.default_notes_text = None  # will be CTkTextbox
 
         self._build()
@@ -156,14 +164,29 @@ class SettingsPage(ctk.CTkFrame):
         )
         tmpl_menu.grid(row=1, column=1, padx=12, pady=6, sticky="e")
 
+        # New: starting numbers / next numbers
+        ctk.CTkLabel(pdf_card, text="Next Invoice Number").grid(
+            row=2, column=0, padx=12, pady=(10, 4), sticky="w"
+        )
+        ctk.CTkEntry(pdf_card, textvariable=self.invoice_seq_var, width=160).grid(
+            row=2, column=1, padx=12, pady=(10, 4), sticky="e"
+        )
+
+        ctk.CTkLabel(pdf_card, text="Next Quote Number").grid(
+            row=3, column=0, padx=12, pady=(4, 8), sticky="w"
+        )
+        ctk.CTkEntry(pdf_card, textvariable=self.quote_seq_var, width=160).grid(
+            row=3, column=1, padx=12, pady=(4, 8), sticky="e"
+        )
+
         # Default notes
         ctk.CTkLabel(pdf_card, text="Default Invoice Notes").grid(
-            row=2, column=0, padx=12, pady=(10, 4), sticky="w"
+            row=4, column=0, padx=12, pady=(10, 4), sticky="w"
         )
 
         self.default_notes_text = ctk.CTkTextbox(pdf_card, height=100)
         self.default_notes_text.grid(
-            row=3, column=0, columnspan=2, padx=12, pady=(0, 10), sticky="nsew"
+            row=5, column=0, columnspan=2, padx=12, pady=(0, 10), sticky="nsew"
         )
         self.default_notes_text.insert(
             "1.0",
@@ -229,10 +252,23 @@ class SettingsPage(ctk.CTkFrame):
             self.default_notes_text.get("1.0", "end").rstrip("\n")
         )
 
+        # parse sequences safely
+        try:
+            invoice_seq = int(self.invoice_seq_var.get() or "0")
+        except ValueError:
+            invoice_seq = int(self.settings.get("invoice_seq", 1000))
+
+        try:
+            quote_seq = int(self.quote_seq_var.get() or "0")
+        except ValueError:
+            quote_seq = int(self.settings.get("quote_seq", 1000))
+
         # update settings dict
         self.settings["company"] = self.company
         self.settings["pdf"] = self.pdf_cfg
         self.settings["default_notes"] = default_notes
+        self.settings["invoice_seq"] = invoice_seq
+        self.settings["quote_seq"] = quote_seq
 
         save_settings(self.settings)
 

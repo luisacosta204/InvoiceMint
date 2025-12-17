@@ -39,39 +39,68 @@ def _add_days(date_str: str, days: int) -> str:
 
 
 class InvoiceBuilder(ctk.CTkFrame):
-    def __init__(self, parent):
+    def __init__(self, parent, doc_type: str = "invoice"):
+        """
+        doc_type: "invoice" or "quote"
+        """
         super().__init__(parent, corner_radius=16)
+
+        # Normalize doc_type – default to "invoice"
+        self.doc_type = doc_type if doc_type in ("invoice", "quote") else "invoice"
+
         self.rows = []
         self.clients = []
         self.client_names = []
         self.selected_client = None
-        self.client_vars = {}  # editable per-invoice fields
+        self.client_vars = {}
 
-        # invoice meta
+        # invoice/quote meta
         self.inv_no_var = tk.StringVar()
         self.inv_date_var = tk.StringVar(value=_today_str())
         self.due_date_var = tk.StringVar(value=_add_days(_today_str(), 14))
         self.terms_var = tk.StringVar(value="Net 14")
-        self.status_var = tk.StringVar(value="No watermark")  # default status
+        self.status_var = tk.StringVar(value="No watermark")
+
+        # UI references
+        self.meta_type_label = None   # "Invoice #" / "Quote #"
+        self.footer = None
+        self.convert_btn = None       # "Convert to Invoice" button
 
         self._init_invoice_number()
         self._build()
 
-    # -------- invoice number bootstrap ----------
+    # ------------------------------------------------------------------
+    # INDEPENDENT NUMBER SEQUENCES
+    # ------------------------------------------------------------------
     def _init_invoice_number(self):
+        """
+        Loads the correct starting number depending on doc_type:
+        - invoice -> invoice_seq
+        - quote   -> quote_seq
+        """
         settings = load_settings() or {}
-        seq = int(settings.get("invoice_seq", 1001))
+        if self.doc_type == "quote":
+            seq = int(settings.get("quote_seq", 1000))
+        else:
+            seq = int(settings.get("invoice_seq", 1000))
         self.inv_no_var.set(str(seq))
 
     def _next_invoice_number(self):
+        """
+        Regen button: next number = current number + 1.
+        Fallbacks to the correct sequence from settings if parsing fails.
+        """
         try:
             return str(int(self.inv_no_var.get().strip() or "0") + 1)
         except Exception:
-            return str(int((load_settings() or {}).get("invoice_seq", 1001)) + 1)
+            settings = load_settings() or {}
+            key = "quote_seq" if self.doc_type == "quote" else "invoice_seq"
+            return str(int(settings.get(key, 1000)) + 1)
 
-    # ---------- UI ----------
+    # ------------------------------------------------------------------
+    # UI BUILD
+    # ------------------------------------------------------------------
     def _build(self):
-        # rows area (items) is the stretchy part
         self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
@@ -94,13 +123,17 @@ class InvoiceBuilder(ctk.CTkFrame):
             row=0, column=2, padx=8, pady=10
         )
 
-        # Right: invoice meta (number + dates + terms)
+        # Right: meta container
         meta = ctk.CTkFrame(top, corner_radius=8)
         meta.grid(row=0, column=3, padx=8, pady=10, sticky="e")
-        for i in range(6):
+        for i in range(9):
             meta.grid_columnconfigure(i, minsize=10)
 
-        ctk.CTkLabel(meta, text="Invoice #").grid(row=0, column=0, padx=(10, 6), pady=6, sticky="e")
+        # Invoice # / Quote #
+        label_text = "Quote #" if self.doc_type == "quote" else "Invoice #"
+        self.meta_type_label = ctk.CTkLabel(meta, text=label_text)
+        self.meta_type_label.grid(row=0, column=0, padx=(10, 6), pady=6, sticky="e")
+
         ctk.CTkEntry(meta, textvariable=self.inv_no_var, width=90).grid(
             row=0, column=1, padx=(0, 8), pady=6
         )
@@ -109,9 +142,9 @@ class InvoiceBuilder(ctk.CTkFrame):
         )
 
         ctk.CTkLabel(meta, text="Date").grid(row=0, column=3, padx=(6, 6), pady=6, sticky="e")
-        ctk.CTkEntry(
-            meta, textvariable=self.inv_date_var, width=110, placeholder_text="YYYY-MM-DD"
-        ).grid(row=0, column=4, padx=(0, 10), pady=6)
+        ctk.CTkEntry(meta, textvariable=self.inv_date_var, width=110).grid(
+            row=0, column=4, padx=(0, 10), pady=6
+        )
 
         ctk.CTkLabel(meta, text="Terms").grid(row=0, column=5, padx=(6, 6), pady=6, sticky="e")
         self.terms_menu = ctk.CTkOptionMenu(
@@ -124,11 +157,11 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.terms_menu.grid(row=0, column=6, padx=(0, 10), pady=6)
 
         ctk.CTkLabel(meta, text="Due").grid(row=0, column=7, padx=(6, 6), pady=6, sticky="e")
-        ctk.CTkEntry(
-            meta, textvariable=self.due_date_var, width=110, placeholder_text="YYYY-MM-DD"
-        ).grid(row=0, column=8, padx=(0, 10), pady=6)
+        ctk.CTkEntry(meta, textvariable=self.due_date_var, width=110).grid(
+            row=0, column=8, padx=(0, 10), pady=6
+        )
 
-        # Status row under invoice number
+        # Status
         ctk.CTkLabel(meta, text="Status").grid(
             row=1, column=0, padx=(10, 6), pady=6, sticky="e"
         )
@@ -140,14 +173,14 @@ class InvoiceBuilder(ctk.CTkFrame):
         )
         self.status_menu.grid(row=1, column=1, padx=(0, 8), pady=6, sticky="w")
 
-        top.grid_columnconfigure(4, weight=1)  # spacer so meta stays right
+        top.grid_columnconfigure(4, weight=1)
 
-        # Editable client card (for this invoice only)
+        # Client Card
         self.client_card = ctk.CTkFrame(self, corner_radius=12)
         self.client_card.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
         self._build_client_card()
 
-        # Header
+        # Header Row
         header = ctk.CTkFrame(self, corner_radius=12)
         header.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 4))
         lbls = ["Service / Item", "Description", "Qty", "Unit Price", "Tax %", "Total", ""]
@@ -156,39 +189,48 @@ class InvoiceBuilder(ctk.CTkFrame):
             ctk.CTkLabel(header, text=t).grid(row=0, column=i, padx=6, pady=8, sticky="w")
             header.grid_columnconfigure(i, minsize=w)
 
-        # Rows area
+        # Rows
         self.scroll = ctk.CTkScrollableFrame(self, corner_radius=12, height=420)
         self.scroll.grid(row=3, column=0, sticky="nsew", padx=12)
 
         # Footer actions
-        footer = ctk.CTkFrame(self, corner_radius=12)
-        footer.grid(row=4, column=0, sticky="ew", padx=12, pady=(8, 12))
-        ctk.CTkButton(footer, text="+ Add Item", command=self.add_row).pack(
+        self.footer = ctk.CTkFrame(self, corner_radius=12)
+        self.footer.grid(row=4, column=0, sticky="ew", padx=12, pady=(8, 12))
+
+        ctk.CTkButton(self.footer, text="+ Add Item", command=self.add_row).pack(
             side="left", padx=6, pady=8
         )
         ctk.CTkButton(
-            footer, text="Save Draft", command=self.on_save, fg_color="#2563eb"
+            self.footer, text="Save Draft", command=self.on_save, fg_color="#2563eb"
         ).pack(side="left", padx=6, pady=8)
-        ctk.CTkButton(footer, text="Load Draft", command=self.on_load).pack(
+        ctk.CTkButton(self.footer, text="Load Draft", command=self.on_load).pack(
             side="left", padx=6, pady=8
         )
-        ctk.CTkButton(footer, text="Preview PDF", command=self.on_preview_pdf).pack(
+
+        # Convert button exists always, but only shown when doc_type == "quote"
+        self.convert_btn = ctk.CTkButton(
+            self.footer,
+            text="Convert to Invoice",
+            command=self.on_convert_to_invoice,
+        )
+        if self.doc_type == "quote":
+            self.convert_btn.pack(side="left", padx=6, pady=8)
+
+        ctk.CTkButton(self.footer, text="Preview PDF", command=self.on_preview_pdf).pack(
             side="right", padx=6, pady=8
         )
-        ctk.CTkButton(footer, text="Export PDF", command=self.on_export_pdf).pack(
+        ctk.CTkButton(self.footer, text="Export PDF", command=self.on_export_pdf).pack(
             side="right", padx=6, pady=8
         )
 
-        # Notes area (per-invoice)
+        # Notes
         notes = ctk.CTkFrame(self, corner_radius=12)
         notes.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 8))
 
         ctk.CTkLabel(notes, text="Notes").pack(anchor="w", padx=10, pady=(8, 0))
-
         self.notes_text = ctk.CTkTextbox(notes, height=70)
         self.notes_text.pack(fill="x", padx=10, pady=(4, 8))
 
-        # Default text from settings (fallback to a sane default)
         s = load_settings() or {}
         default_notes = s.get(
             "default_notes",
@@ -196,7 +238,7 @@ class InvoiceBuilder(ctk.CTkFrame):
         )
         self.notes_text.insert("1.0", default_notes)
 
-        # Totals
+        # Totals footer
         totals = ctk.CTkFrame(self, corner_radius=12)
         totals.grid(row=6, column=0, sticky="e", padx=12, pady=(0, 12))
         self.subtotal_var = tk.StringVar(value="0.00")
@@ -217,10 +259,12 @@ class InvoiceBuilder(ctk.CTkFrame):
         trow("Total Tax:", self.tax_var)
         trow("Grand Total:", self.total_var, bold=True)
 
-        # bootstrap
         self._reload_clients()
         self.add_row()
 
+    # ------------------------------------------------------------------
+    # CLIENT CARD
+    # ------------------------------------------------------------------
     def _build_client_card(self):
         labels = [
             ("Business / Name", "business_or_name"),
@@ -242,7 +286,6 @@ class InvoiceBuilder(ctk.CTkFrame):
             ent.grid(row=i // 2, column=(i % 2) * 2 + 1, padx=10, pady=8, sticky="w")
         self._apply_client_to_card({})
 
-    # ---------- helpers ----------
     def _apply_client_to_card(self, client):
         display_name = client.get("business") or client.get("name") or ""
         self.client_vars["business_or_name"].set(display_name)
@@ -250,18 +293,9 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.client_vars["email"].set(client.get("email", ""))
         self.client_vars["phone"].set(client.get("phone", ""))
 
-    def _open_file(self, path: str):
-        """Open a file with the default system viewer."""
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(path)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
-        except Exception as exc:
-            print(f"Could not open file {path!r}: {exc}")
-
+    # ------------------------------------------------------------------
+    # CLIENT PICKING
+    # ------------------------------------------------------------------
     def _reload_clients(self, *_):
         self.clients = load_clients() or []
 
@@ -284,6 +318,9 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.selected_client = self.clients[idx] if 0 <= idx < len(self.clients) else None
         self._apply_client_to_card(self.selected_client or {})
 
+    # ------------------------------------------------------------------
+    # TERMS CHANGE
+    # ------------------------------------------------------------------
     def _on_terms_change(self, selected):
         days = 0
         if selected == "Net 7":
@@ -299,7 +336,9 @@ class InvoiceBuilder(ctk.CTkFrame):
     def _regen_invoice_no(self):
         self.inv_no_var.set(self._next_invoice_number())
 
-    # ---------- rows ----------
+    # ------------------------------------------------------------------
+    # ROWS
+    # ------------------------------------------------------------------
     def add_row(self, preset=None):
         idx = len(self.rows)
         row = ctk.CTkFrame(self.scroll, corner_radius=10)
@@ -351,6 +390,9 @@ class InvoiceBuilder(ctk.CTkFrame):
             e_tax.insert(0, str(preset.get("tax_pct", 0)))
         self.recompute()
 
+    # ------------------------------------------------------------------
+    # TOTALS
+    # ------------------------------------------------------------------
     def recompute(self):
         subtotal = 0.0
         tax_total = 0.0
@@ -370,7 +412,9 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.tax_var.set(f"{tax_total:.2f}")
         self.total_var.set(f"{(subtotal + tax_total):.2f}")
 
-    # ---------- state / drafts ----------
+    # ------------------------------------------------------------------
+    # STATE / DRAFTS
+    # ------------------------------------------------------------------
     def _current_client_for_state(self):
         base = dict(self.selected_client or {})
         edited_name = self.client_vars["business_or_name"].get().strip()
@@ -403,8 +447,17 @@ class InvoiceBuilder(ctk.CTkFrame):
         else:
             status_value = raw_status
 
-        return {
-            "kind": "invoice",
+        totals = {
+            "subtotal": float(self.subtotal_var.get()),
+            "tax": float(self.tax_var.get()),
+            "grand_total": float(self.total_var.get()),
+        }
+
+        # "kind" follows doc_type for compatibility with PDF templates
+        kind = "invoice" if self.doc_type == "invoice" else "quote"
+
+        state = {
+            "kind": kind,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "client": self._current_client_for_state(),
             "meta": {
@@ -415,15 +468,43 @@ class InvoiceBuilder(ctk.CTkFrame):
                 "status": status_value,
             },
             "items": items,
-            "totals": {
-                "subtotal": float(self.subtotal_var.get()),
-                "tax": float(self.tax_var.get()),
-                "grand_total": float(self.total_var.get()),
-            },
+            "totals": totals,
             "notes": self.notes_text.get("1.0", "end").strip(),
         }
 
+        # Extra top-level fields used by dashboard / analytics / quote system
+        state["doc_type"] = self.doc_type
+        state["date"] = state["meta"]["date"]
+        state["total_amount"] = totals["grand_total"]
+        state["status"] = status_value
+
+        return state
+
     def set_state(self, state: dict):
+        # Determine doc_type from state (prefer doc_type, fallback to kind)
+        dtype = state.get("doc_type")
+        if dtype not in ("invoice", "quote"):
+            kind = state.get("kind")
+            if kind in ("invoice", "quote"):
+                dtype = kind
+            else:
+                dtype = "invoice"
+        self.doc_type = dtype
+
+        # Update label
+        if hasattr(self, "meta_type_label") and self.meta_type_label is not None:
+            label_text = "Quote #" if self.doc_type == "quote" else "Invoice #"
+            self.meta_type_label.configure(text=label_text)
+
+        # Show/hide convert button
+        if self.convert_btn is not None:
+            if self.doc_type == "quote":
+                if not self.convert_btn.winfo_manager():
+                    self.convert_btn.pack(side="left", padx=6, pady=8)
+            else:
+                if self.convert_btn.winfo_manager():
+                    self.convert_btn.pack_forget()
+
         # meta
         meta = state.get("meta") or {}
         if "number" in meta:
@@ -438,14 +519,9 @@ class InvoiceBuilder(ctk.CTkFrame):
         # status restore
         stored_status = (meta.get("status") or "").strip()
         if not stored_status:
-            # if empty in state, map back to "No watermark"
             self.status_var.set("No watermark")
         else:
-            # if it's one of our known options, use it; otherwise just display as-is
-            if stored_status in ["UNPAID", "PAID", "OVERDUE"]:
-                self.status_var.set(stored_status)
-            else:
-                self.status_var.set(stored_status)
+            self.status_var.set(stored_status)
 
         # client
         cli = state.get("client") or {}
@@ -479,15 +555,88 @@ class InvoiceBuilder(ctk.CTkFrame):
                 )
                 self.notes_text.insert("1.0", default_notes)
 
-    def on_save(self):
-        # ask for a friendly name (default to invoice number)
-        default_name = self.inv_no_var.get().strip() or datetime.now().strftime(
-            "invoice-%Y%m%d-%H%M%S"
+    # ------------------------------------------------------------------
+    # CONVERT QUOTE -> INVOICE
+    # ------------------------------------------------------------------
+    def on_convert_to_invoice(self):
+        """
+        Convert the current document (if quote) into an invoice:
+        - switch doc_type
+        - pick an invoice number from invoice_seq
+        - set default status if needed
+        NOTE: we do NOT bump invoice_seq here; export handles that.
+        """
+        if self.doc_type == "invoice":
+            return  # already an invoice
+
+        settings = load_settings() or {}
+        base_seq = int(settings.get("invoice_seq", 1000))
+
+        # Current number might be a quote number; choose a safe invoice number
+        try:
+            current_num = int(self.inv_no_var.get() or "0")
+        except Exception:
+            current_num = 0
+
+        new_num = max(base_seq, current_num)
+        if new_num <= 0:
+            new_num = base_seq
+
+        self.doc_type = "invoice"
+        self.inv_no_var.set(str(new_num))
+
+        # Update label & hide convert button
+        if self.meta_type_label is not None:
+            self.meta_type_label.configure(text="Invoice #")
+        if self.convert_btn is not None and self.convert_btn.winfo_manager():
+            self.convert_btn.pack_forget()
+
+        # Default status for a new invoice if previously "No watermark"/empty
+        if (self.status_var.get() or "").strip().lower() in ("", "no watermark"):
+            self.status_var.set("UNPAID")
+
+        # Ensure we have sane terms/due date
+        if self.terms_var.get() not in TERMS_OPTIONS:
+            self.terms_var.set("Net 14")
+            self.due_date_var.set(
+                _add_days(self.inv_date_var.get() or _today_str(), 14)
+            )
+
+        # Tiny toast
+        toast = ctk.CTkToplevel(self)
+        toast.title("Converted")
+        ctk.CTkLabel(toast, text=f"Converted to Invoice #{new_num}.").pack(
+            padx=16, pady=16
         )
+        toast.geometry(
+            "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
+        )
+        toast.after(1500, toast.destroy)
+
+    # ------------------------------------------------------------------
+    # SAVE / LOAD DRAFTS
+    # ------------------------------------------------------------------
+    def on_save(self):
+        # ask for a friendly name (default to invoice/quote number)
+        prefix = "quote" if self.doc_type == "quote" else "invoice"
+        default_name = self.inv_no_var.get().strip() or datetime.now().strftime(
+            f"{prefix}-%Y%m%d-%H%M%S"
+        )
+
         dialog = CTkInputDialog(
             title="Save Draft", text="Draft name (or leave blank for auto):"
         )
-        dialog.entry.insert(0, default_name)
+
+        # Try to prefill the input field for both older and newer CTkInputDialog APIs
+        try:
+            entry = getattr(dialog, "entry", None) or getattr(dialog, "_entry", None)
+            if entry is not None:
+                entry.delete(0, "end")
+                entry.insert(0, default_name)
+        except Exception:
+            # If anything goes wrong, just continue without prefill
+            pass
+
         name = dialog.get_input()
         if name is None:
             return  # user cancelled
@@ -503,6 +652,8 @@ class InvoiceBuilder(ctk.CTkFrame):
             "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
         )
         toast.after(1600, toast.destroy)
+
+
 
     def on_load(self):
         drafts = list_drafts()
@@ -553,8 +704,11 @@ class InvoiceBuilder(ctk.CTkFrame):
         if state:
             self.set_state(state)
 
+    # ------------------------------------------------------------------
+    # PDF PREVIEW / EXPORT
+    # ------------------------------------------------------------------
     def on_preview_pdf(self):
-        """Render current invoice to a temporary PDF and open it."""
+        """Render current invoice/quote to a temporary PDF and open it."""
         state = self.get_state()
         settings = load_settings() or {}
 
@@ -572,8 +726,9 @@ class InvoiceBuilder(ctk.CTkFrame):
     def on_export_pdf(self):
         state = self.get_state()
         settings = load_settings() or {}
+        prefix = "Quote" if state.get("doc_type") == "quote" else "Invoice"
         default_name = (
-            f"Invoice-{state['meta']['number'] or datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
+            f"{prefix}-{state['meta']['number'] or datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
         )
         path = filedialog.asksaveasfilename(
             title="Export PDF",
@@ -586,15 +741,24 @@ class InvoiceBuilder(ctk.CTkFrame):
 
         generate_invoice_pdf(state, settings, path)
 
-        # bump invoice sequence in settings (max of current seq and this number + 1)
+        # bump the correct sequence in settings
+        doc_type = state.get("doc_type", "invoice")
         try:
             num = int(state["meta"]["number"] or "0")
         except Exception:
-            num = int(settings.get("invoice_seq", 1001))
-        next_seq = max(int(settings.get("invoice_seq", 1001)), num) + 1
-        settings["invoice_seq"] = next_seq
+            num = 0
+
+        if doc_type == "invoice":
+            base = int(settings.get("invoice_seq", 1000))
+            next_seq = max(base, num) + 1
+            settings["invoice_seq"] = next_seq
+        else:  # quote
+            base = int(settings.get("quote_seq", 1000))
+            next_seq = max(base, num) + 1
+            settings["quote_seq"] = next_seq
+
         save_settings(settings)
-        self.inv_no_var.set(str(next_seq))  # preload for next invoice
+        self.inv_no_var.set(str(next_seq))  # preload for next doc of this type
 
         toast = ctk.CTkToplevel(self)
         toast.title("Exported")
@@ -603,3 +767,18 @@ class InvoiceBuilder(ctk.CTkFrame):
             "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
         )
         toast.after(1600, toast.destroy)
+
+    # ------------------------------------------------------------------
+    # FILE OPEN
+    # ------------------------------------------------------------------
+    def _open_file(self, path: str):
+        """Open a file with the default system viewer."""
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            print(f"Could not open file {path!r}: {exc}")
