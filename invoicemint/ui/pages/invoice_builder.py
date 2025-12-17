@@ -48,6 +48,9 @@ class InvoiceBuilder(ctk.CTkFrame):
         # Normalize doc_type – default to "invoice"
         self.doc_type = doc_type if doc_type in ("invoice", "quote") else "invoice"
 
+        # If this invoice was converted from a quote, store its number here
+        self.converted_from_quote: str | None = None
+
         self.rows = []
         self.clients = []
         self.client_names = []
@@ -472,6 +475,11 @@ class InvoiceBuilder(ctk.CTkFrame):
             "notes": self.notes_text.get("1.0", "end").strip(),
         }
 
+        # If this invoice was converted from a quote, include that in meta
+        if self.doc_type == "invoice" and self.converted_from_quote:
+            state["meta"]["converted_from_quote"] = self.converted_from_quote
+            state["converted_from_quote"] = self.converted_from_quote
+
         # Extra top-level fields used by dashboard / analytics / quote system
         state["doc_type"] = self.doc_type
         state["date"] = state["meta"]["date"]
@@ -515,6 +523,13 @@ class InvoiceBuilder(ctk.CTkFrame):
             self.due_date_var.set(meta["due_date"])
         if "terms" in meta and meta["terms"] in TERMS_OPTIONS:
             self.terms_var.set(meta["terms"])
+
+        # converted-from info (for invoices that came from quotes)
+        self.converted_from_quote = (
+            meta.get("converted_from_quote")
+            or state.get("converted_from_quote")
+            or None
+        )
 
         # status restore
         stored_status = (meta.get("status") or "").strip()
@@ -563,11 +578,14 @@ class InvoiceBuilder(ctk.CTkFrame):
         Convert the current document (if quote) into an invoice:
         - switch doc_type
         - pick an invoice number from invoice_seq
-        - set default status if needed
+        - remember original quote number
         NOTE: we do NOT bump invoice_seq here; export handles that.
         """
         if self.doc_type == "invoice":
             return  # already an invoice
+
+        # Remember the quote number we are converting from
+        original_quote_no = (self.inv_no_var.get() or "").strip() or None
 
         settings = load_settings() or {}
         base_seq = int(settings.get("invoice_seq", 1000))
@@ -582,8 +600,10 @@ class InvoiceBuilder(ctk.CTkFrame):
         if new_num <= 0:
             new_num = base_seq
 
+        # Flip type + number
         self.doc_type = "invoice"
         self.inv_no_var.set(str(new_num))
+        self.converted_from_quote = original_quote_no
 
         # Update label & hide convert button
         if self.meta_type_label is not None:
@@ -603,9 +623,13 @@ class InvoiceBuilder(ctk.CTkFrame):
             )
 
         # Tiny toast
+        msg = f"Converted to Invoice #{new_num}."
+        if original_quote_no:
+            msg += f"\n(from Quote #{original_quote_no})"
+
         toast = ctk.CTkToplevel(self)
         toast.title("Converted")
-        ctk.CTkLabel(toast, text=f"Converted to Invoice #{new_num}.").pack(
+        ctk.CTkLabel(toast, text=msg).pack(
             padx=16, pady=16
         )
         toast.geometry(
@@ -652,8 +676,6 @@ class InvoiceBuilder(ctk.CTkFrame):
             "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
         )
         toast.after(1600, toast.destroy)
-
-
 
     def on_load(self):
         drafts = list_drafts()

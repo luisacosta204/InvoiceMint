@@ -107,6 +107,13 @@ def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
     doc_type  = (state or {}).get("doc_type") or ("invoice" if state.get("kind") == "invoice" else "quote")
     doc_title = "Quote" if str(doc_type).lower() == "quote" else "Invoice"
 
+    # If this invoice was converted from a quote, pick up that info
+    converted_from = (
+        meta.get("converted_from_quote")
+        or state.get("converted_from_quote")
+        or ""
+    )
+
     c = canvas.Canvas(out_path, pagesize=A4)
     c.setTitle(doc_title)
 
@@ -188,6 +195,11 @@ def _generate_invoice_pdf_modern(state: dict, settings: dict, out_path: str):
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}" + (f"  ({meta.get('terms')})" if meta.get('terms') else ""),
     ]
+
+    # Only show "Converted from Quote" on invoices
+    if doc_title == "Invoice" and converted_from:
+        lines.append(f"Converted from Quote #{converted_from}")
+
     if status_label:
         lines.append(f"Status: {status_label}")
 
@@ -293,6 +305,12 @@ def _generate_invoice_pdf_compact(state: dict, settings: dict, out_path: str):
     doc_type  = (state or {}).get("doc_type") or ("invoice" if state.get("kind") == "invoice" else "quote")
     doc_title = "Quote" if str(doc_type).lower() == "quote" else "Invoice"
 
+    converted_from = (
+        meta.get("converted_from_quote")
+        or state.get("converted_from_quote")
+        or ""
+    )
+
     c = canvas.Canvas(out_path, pagesize=A4)
     c.setTitle(doc_title)
 
@@ -373,6 +391,10 @@ def _generate_invoice_pdf_compact(state: dict, settings: dict, out_path: str):
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}" + (f"  ({meta.get('terms')})" if meta.get('terms') else ""),
     ]
+
+    if doc_title == "Invoice" and converted_from:
+        lines.append(f"Converted from Quote #{converted_from}")
+
     if status_label:
         lines.append(f"Status: {status_label}")
 
@@ -482,6 +504,12 @@ def _generate_invoice_pdf_minimal(state: dict, settings: dict, out_path: str):
     doc_type  = (state or {}).get("doc_type") or ("invoice" if state.get("kind") == "invoice" else "quote")
     doc_title = "Quote" if str(doc_type).lower() == "quote" else "Invoice"
 
+    converted_from = (
+        meta.get("converted_from_quote")
+        or state.get("converted_from_quote")
+        or ""
+    )
+
     c = canvas.Canvas(out_path, pagesize=A4)
     c.setTitle(doc_title)
 
@@ -552,6 +580,10 @@ def _generate_invoice_pdf_minimal(state: dict, settings: dict, out_path: str):
         f"Date: {meta.get('date','')}",
         f"Due: {meta.get('due_date','')}",
     ]
+
+    if doc_title == "Invoice" and converted_from:
+        meta_lines.append(f"Converted from Quote #{converted_from}")
+
     if status_label:
         meta_lines.append(f"Status: {status_label}")
 
