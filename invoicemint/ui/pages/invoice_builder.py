@@ -53,7 +53,7 @@ class InvoiceBuilder(ctk.CTkFrame):
 
         self.rows = []
         self.clients = []
-        self.client_names = []
+        self.client_names = []          # full list (display)
         self.selected_client = None
         self.client_vars = {}
 
@@ -64,10 +64,22 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.terms_var = tk.StringVar(value="Net 14")
         self.status_var = tk.StringVar(value="No watermark")
 
+        # client selection vars
+        self.client_var = tk.StringVar(value="(No client selected)")
+        self.client_search_var = tk.StringVar(value="")
+
         # UI references
-        self.meta_type_label = None   # "Invoice #" / "Quote #"
+        self.meta_type_label = None
         self.footer = None
-        self.convert_btn = None       # "Convert to Invoice" button
+        self.convert_btn = None
+
+        self.client_menu = None
+        self.client_search_entry = None
+
+        # Autocomplete popup state
+        self._suggest_win: tk.Toplevel | None = None
+        self._suggest_list: tk.Listbox | None = None
+        self._suggest_matches: list[dict] = []
 
         self._init_invoice_number()
         self._build()
@@ -76,11 +88,6 @@ class InvoiceBuilder(ctk.CTkFrame):
     # INDEPENDENT NUMBER SEQUENCES
     # ------------------------------------------------------------------
     def _init_invoice_number(self):
-        """
-        Loads the correct starting number depending on doc_type:
-        - invoice -> invoice_seq
-        - quote   -> quote_seq
-        """
         settings = load_settings() or {}
         if self.doc_type == "quote":
             seq = int(settings.get("quote_seq", 1000))
@@ -89,16 +96,197 @@ class InvoiceBuilder(ctk.CTkFrame):
         self.inv_no_var.set(str(seq))
 
     def _next_invoice_number(self):
-        """
-        Regen button: next number = current number + 1.
-        Fallbacks to the correct sequence from settings if parsing fails.
-        """
         try:
             return str(int(self.inv_no_var.get().strip() or "0") + 1)
         except Exception:
             settings = load_settings() or {}
             key = "quote_seq" if self.doc_type == "quote" else "invoice_seq"
             return str(int(settings.get(key, 1000)) + 1)
+
+    # ------------------------------------------------------------------
+    # CLIENT SEARCH HELPERS
+    # ------------------------------------------------------------------
+    def _client_display(self, c: dict) -> str:
+        return c.get("business") or c.get("name") or c.get("email", "Unnamed")
+
+    def _client_matches(self, c: dict, q: str) -> bool:
+        if not q:
+            return True
+        q = q.lower().strip()
+        return (
+            q in str(c.get("business", "") or "").lower()
+            or q in str(c.get("name", "") or "").lower()
+            or q in str(c.get("email", "") or "").lower()
+            or q in str(c.get("address", "") or "").lower()
+            or q in str(c.get("phone", "") or "").lower()
+        )
+
+    # ------------------------------------------------------------------
+    # AUTOCOMPLETE DROPDOWN (REAL POPUP)
+    # ------------------------------------------------------------------
+    def _ensure_suggest_popup(self):
+        if self._suggest_win is not None and self._suggest_list is not None:
+            return
+
+        win = tk.Toplevel(self.winfo_toplevel())
+        win.withdraw()
+        win.overrideredirect(True)   # no window chrome
+        win.attributes("-topmost", True)
+
+        # listbox inside
+        lb = tk.Listbox(
+            win,
+            activestyle="none",
+            exportselection=False,
+            height=6,
+        )
+
+        # basic styling (tk listbox won't follow CTk theme perfectly, but it's clean/usable)
+        lb.configure(
+            borderwidth=1,
+            relief="solid",
+        )
+        lb.pack(fill="both", expand=True)
+
+        # selection handlers
+        lb.bind("<ButtonRelease-1>", self._on_suggest_click)
+        lb.bind("<Return>", self._on_suggest_enter)
+        lb.bind("<Escape>", lambda _e: self._hide_suggest())
+        lb.bind("<FocusOut>", lambda _e: self.after(120, self._maybe_hide_suggest))
+
+        self._suggest_win = win
+        self._suggest_list = lb
+
+    def _show_suggest(self, matches: list[dict]):
+        self._ensure_suggest_popup()
+        if self._suggest_win is None or self._suggest_list is None or self.client_search_entry is None:
+            return
+
+        self._suggest_matches = matches
+
+        lb = self._suggest_list
+        lb.delete(0, tk.END)
+
+        # show label lines (name + email small-ish)
+        for c in matches:
+            name = self._client_display(c)
+            email = (c.get("email") or "").strip()
+            if email and email.lower() not in name.lower():
+                label = f"{name}  <{email}>"
+            else:
+                label = name
+            lb.insert(tk.END, label)
+
+        # position under the entry
+        ex = self.client_search_entry.winfo_rootx()
+        ey = self.client_search_entry.winfo_rooty()
+        ew = self.client_search_entry.winfo_width()
+        eh = self.client_search_entry.winfo_height()
+
+        # size: up to 6 items
+        rows = min(6, max(1, len(matches)))
+        row_px = 22
+        height = rows * row_px + 2
+
+        self._suggest_win.geometry(f"{ew}x{height}+{ex}+{ey+eh+2}")
+        self._suggest_win.deiconify()
+        self._suggest_win.lift()
+
+        # preselect first row
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(0)
+        lb.activate(0)
+
+    def _hide_suggest(self):
+        if self._suggest_win is not None:
+            try:
+                self._suggest_win.withdraw()
+            except Exception:
+                pass
+
+    def _maybe_hide_suggest(self):
+        """
+        Hide only if focus is not in search entry or listbox.
+        (Prevents the "flash" / instant hide.)
+        """
+        try:
+            focus = self.winfo_toplevel().focus_get()
+        except Exception:
+            focus = None
+
+        if focus is None:
+            self._hide_suggest()
+            return
+
+        if self.client_search_entry is not None and focus == self.client_search_entry:
+            return
+        if self._suggest_list is not None and focus == self._suggest_list:
+            return
+
+        self._hide_suggest()
+
+    def _update_suggestions(self, *_):
+        q = (self.client_search_var.get() or "").strip()
+        if not q:
+            self._hide_suggest()
+            return
+
+        matches = [c for c in (self.clients or []) if self._client_matches(c, q)]
+        if not matches:
+            self._hide_suggest()
+            return
+
+        self._show_suggest(matches)
+
+    def _on_suggest_click(self, _event=None):
+        self._select_suggest_current()
+
+    def _on_suggest_enter(self, _event=None):
+        self._select_suggest_current()
+        return "break"
+
+    def _select_suggest_current(self):
+        if self._suggest_list is None:
+            return
+        sel = self._suggest_list.curselection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx < 0 or idx >= len(self._suggest_matches):
+            return
+
+        client = self._suggest_matches[idx]
+        name = self._client_display(client)
+
+        # select in the normal dropdown + apply to card
+        self.client_var.set(name)
+        self._on_pick_client(name)
+
+        # clear search + hide popup
+        self.client_search_var.set("")
+        self._hide_suggest()
+
+        # put focus back to main UI
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _entry_down(self, _event=None):
+        # move focus into listbox
+        if self._suggest_win is None or self._suggest_list is None:
+            return
+        if str(self._suggest_win.state()) != "normal":
+            return
+        try:
+            self._suggest_list.focus_set()
+        except Exception:
+            pass
+        return "break"
+
+    def _entry_escape(self, _event=None):
+        self._hide_suggest()
+        return "break"
 
     # ------------------------------------------------------------------
     # UI BUILD
@@ -111,28 +299,43 @@ class InvoiceBuilder(ctk.CTkFrame):
         top = ctk.CTkFrame(self, corner_radius=12)
         top.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
 
-        # Left: client selector
+        # Left: client selector + search
         ctk.CTkLabel(top, text="Client").grid(row=0, column=0, padx=8, pady=10, sticky="w")
-        self.client_var = tk.StringVar(value="(No client selected)")
+
+        self.client_search_entry = ctk.CTkEntry(
+            top,
+            textvariable=self.client_search_var,
+            width=220,
+            placeholder_text="Search clients…",
+        )
+        self.client_search_entry.grid(row=0, column=1, padx=(8, 6), pady=10, sticky="w")
+
+        # live suggestions
+        self.client_search_entry.bind("<KeyRelease>", self._update_suggestions)
+        self.client_search_entry.bind("<Down>", self._entry_down)
+        self.client_search_entry.bind("<Escape>", self._entry_escape)
+        self.client_search_entry.bind("<FocusOut>", lambda _e: self.after(120, self._maybe_hide_suggest))
+
+        # dropdown (still usable)
         self.client_menu = ctk.CTkOptionMenu(
             top,
             values=["(No client selected)"],
             variable=self.client_var,
-            width=320,
+            width=280,
             command=self._on_pick_client,
         )
-        self.client_menu.grid(row=0, column=1, padx=8, pady=10, sticky="w")
+        self.client_menu.grid(row=0, column=2, padx=(6, 8), pady=10, sticky="w")
+
         ctk.CTkButton(top, text="Refresh", width=100, command=self._reload_clients).grid(
-            row=0, column=2, padx=8, pady=10
+            row=0, column=3, padx=8, pady=10
         )
 
         # Right: meta container
         meta = ctk.CTkFrame(top, corner_radius=8)
-        meta.grid(row=0, column=3, padx=8, pady=10, sticky="e")
+        meta.grid(row=0, column=4, padx=8, pady=10, sticky="e")
         for i in range(9):
             meta.grid_columnconfigure(i, minsize=10)
 
-        # Invoice # / Quote #
         label_text = "Quote #" if self.doc_type == "quote" else "Invoice #"
         self.meta_type_label = ctk.CTkLabel(meta, text=label_text)
         self.meta_type_label.grid(row=0, column=0, padx=(10, 6), pady=6, sticky="e")
@@ -164,7 +367,6 @@ class InvoiceBuilder(ctk.CTkFrame):
             row=0, column=8, padx=(0, 10), pady=6
         )
 
-        # Status
         ctk.CTkLabel(meta, text="Status").grid(
             row=1, column=0, padx=(10, 6), pady=6, sticky="e"
         )
@@ -176,7 +378,7 @@ class InvoiceBuilder(ctk.CTkFrame):
         )
         self.status_menu.grid(row=1, column=1, padx=(0, 8), pady=6, sticky="w")
 
-        top.grid_columnconfigure(4, weight=1)
+        top.grid_columnconfigure(5, weight=1)
 
         # Client Card
         self.client_card = ctk.CTkFrame(self, corner_radius=12)
@@ -210,7 +412,6 @@ class InvoiceBuilder(ctk.CTkFrame):
             side="left", padx=6, pady=8
         )
 
-        # Convert button exists always, but only shown when doc_type == "quote"
         self.convert_btn = ctk.CTkButton(
             self.footer,
             text="Convert to Invoice",
@@ -301,25 +502,37 @@ class InvoiceBuilder(ctk.CTkFrame):
     # ------------------------------------------------------------------
     def _reload_clients(self, *_):
         self.clients = load_clients() or []
+        self.client_names = ["(No client selected)"] + [self._client_display(c) for c in self.clients]
 
-        def display(c):
-            return c.get("business") or c.get("name") or c.get("email", "Unnamed")
+        if self.client_menu is not None:
+            self.client_menu.configure(values=self.client_names)
 
-        self.client_names = ["(No client selected)"] + [display(c) for c in self.clients]
-        self.client_menu.configure(values=self.client_names)
         if self.client_var.get() not in self.client_names:
             self.client_var.set("(No client selected)")
             self.selected_client = None
             self._apply_client_to_card({})
+
+        # hide any old suggestions after refresh
+        self._hide_suggest()
 
     def _on_pick_client(self, name):
         if name == "(No client selected)":
             self.selected_client = None
             self._apply_client_to_card({})
             return
-        idx = self.client_names.index(name) - 1
-        self.selected_client = self.clients[idx] if 0 <= idx < len(self.clients) else None
+
+        chosen = None
+        for c in self.clients:
+            if self._client_display(c) == name:
+                chosen = c
+                break
+
+        self.selected_client = chosen
         self._apply_client_to_card(self.selected_client or {})
+
+        # When user picks from dropdown, close suggestions too
+        self._hide_suggest()
+        self.client_search_var.set("")
 
     # ------------------------------------------------------------------
     # TERMS CHANGE
@@ -443,12 +656,8 @@ class InvoiceBuilder(ctk.CTkFrame):
                 }
             )
 
-        # Map "No watermark" UI choice to an empty status so PDFs show no status
         raw_status = (self.status_var.get() or "").strip()
-        if raw_status.lower() == "no watermark":
-            status_value = ""
-        else:
-            status_value = raw_status
+        status_value = "" if raw_status.lower() == "no watermark" else raw_status
 
         totals = {
             "subtotal": float(self.subtotal_var.get()),
@@ -456,7 +665,6 @@ class InvoiceBuilder(ctk.CTkFrame):
             "grand_total": float(self.total_var.get()),
         }
 
-        # "kind" follows doc_type for compatibility with PDF templates
         kind = "invoice" if self.doc_type == "invoice" else "quote"
 
         state = {
@@ -475,12 +683,10 @@ class InvoiceBuilder(ctk.CTkFrame):
             "notes": self.notes_text.get("1.0", "end").strip(),
         }
 
-        # If this invoice was converted from a quote, include that in meta
         if self.doc_type == "invoice" and self.converted_from_quote:
             state["meta"]["converted_from_quote"] = self.converted_from_quote
             state["converted_from_quote"] = self.converted_from_quote
 
-        # Extra top-level fields used by dashboard / analytics / quote system
         state["doc_type"] = self.doc_type
         state["date"] = state["meta"]["date"]
         state["total_amount"] = totals["grand_total"]
@@ -489,22 +695,15 @@ class InvoiceBuilder(ctk.CTkFrame):
         return state
 
     def set_state(self, state: dict):
-        # Determine doc_type from state (prefer doc_type, fallback to kind)
         dtype = state.get("doc_type")
         if dtype not in ("invoice", "quote"):
             kind = state.get("kind")
-            if kind in ("invoice", "quote"):
-                dtype = kind
-            else:
-                dtype = "invoice"
+            dtype = kind if kind in ("invoice", "quote") else "invoice"
         self.doc_type = dtype
 
-        # Update label
-        if hasattr(self, "meta_type_label") and self.meta_type_label is not None:
-            label_text = "Quote #" if self.doc_type == "quote" else "Invoice #"
-            self.meta_type_label.configure(text=label_text)
+        if self.meta_type_label is not None:
+            self.meta_type_label.configure(text=("Quote #" if self.doc_type == "quote" else "Invoice #"))
 
-        # Show/hide convert button
         if self.convert_btn is not None:
             if self.doc_type == "quote":
                 if not self.convert_btn.winfo_manager():
@@ -513,7 +712,6 @@ class InvoiceBuilder(ctk.CTkFrame):
                 if self.convert_btn.winfo_manager():
                     self.convert_btn.pack_forget()
 
-        # meta
         meta = state.get("meta") or {}
         if "number" in meta:
             self.inv_no_var.set(str(meta["number"]))
@@ -524,30 +722,27 @@ class InvoiceBuilder(ctk.CTkFrame):
         if "terms" in meta and meta["terms"] in TERMS_OPTIONS:
             self.terms_var.set(meta["terms"])
 
-        # converted-from info (for invoices that came from quotes)
         self.converted_from_quote = (
             meta.get("converted_from_quote")
             or state.get("converted_from_quote")
             or None
         )
 
-        # status restore
         stored_status = (meta.get("status") or "").strip()
-        if not stored_status:
-            self.status_var.set("No watermark")
-        else:
-            self.status_var.set(stored_status)
+        self.status_var.set("No watermark" if not stored_status else stored_status)
 
-        # client
         cli = state.get("client") or {}
         self._apply_client_to_card(cli)
+
         display = cli.get("business") or cli.get("name") or cli.get("email", "")
         if display and display in self.client_names:
             self.client_var.set(display)
         else:
             self.client_var.set("(No client selected)")
 
-        # rows
+        self.client_search_var.set("")
+        self._hide_suggest()
+
         for tup in list(self.rows):
             tup[0].destroy()
         self.rows.clear()
@@ -557,7 +752,6 @@ class InvoiceBuilder(ctk.CTkFrame):
             self.add_row()
         self.recompute()
 
-        # notes
         if hasattr(self, "notes_text"):
             self.notes_text.delete("1.0", "end")
             if "notes" in state:
@@ -574,23 +768,14 @@ class InvoiceBuilder(ctk.CTkFrame):
     # CONVERT QUOTE -> INVOICE
     # ------------------------------------------------------------------
     def on_convert_to_invoice(self):
-        """
-        Convert the current document (if quote) into an invoice:
-        - switch doc_type
-        - pick an invoice number from invoice_seq
-        - remember original quote number
-        NOTE: we do NOT bump invoice_seq here; export handles that.
-        """
         if self.doc_type == "invoice":
-            return  # already an invoice
+            return
 
-        # Remember the quote number we are converting from
         original_quote_no = (self.inv_no_var.get() or "").strip() or None
 
         settings = load_settings() or {}
         base_seq = int(settings.get("invoice_seq", 1000))
 
-        # Current number might be a quote number; choose a safe invoice number
         try:
             current_num = int(self.inv_no_var.get() or "0")
         except Exception:
@@ -600,48 +785,36 @@ class InvoiceBuilder(ctk.CTkFrame):
         if new_num <= 0:
             new_num = base_seq
 
-        # Flip type + number
         self.doc_type = "invoice"
         self.inv_no_var.set(str(new_num))
         self.converted_from_quote = original_quote_no
 
-        # Update label & hide convert button
         if self.meta_type_label is not None:
             self.meta_type_label.configure(text="Invoice #")
         if self.convert_btn is not None and self.convert_btn.winfo_manager():
             self.convert_btn.pack_forget()
 
-        # Default status for a new invoice if previously "No watermark"/empty
         if (self.status_var.get() or "").strip().lower() in ("", "no watermark"):
             self.status_var.set("UNPAID")
 
-        # Ensure we have sane terms/due date
         if self.terms_var.get() not in TERMS_OPTIONS:
             self.terms_var.set("Net 14")
-            self.due_date_var.set(
-                _add_days(self.inv_date_var.get() or _today_str(), 14)
-            )
+            self.due_date_var.set(_add_days(self.inv_date_var.get() or _today_str(), 14))
 
-        # Tiny toast
         msg = f"Converted to Invoice #{new_num}."
         if original_quote_no:
             msg += f"\n(from Quote #{original_quote_no})"
 
         toast = ctk.CTkToplevel(self)
         toast.title("Converted")
-        ctk.CTkLabel(toast, text=msg).pack(
-            padx=16, pady=16
-        )
-        toast.geometry(
-            "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
-        )
+        ctk.CTkLabel(toast, text=msg).pack(padx=16, pady=16)
+        toast.geometry("+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80))
         toast.after(1500, toast.destroy)
 
     # ------------------------------------------------------------------
     # SAVE / LOAD DRAFTS
     # ------------------------------------------------------------------
     def on_save(self):
-        # ask for a friendly name (default to invoice/quote number)
         prefix = "quote" if self.doc_type == "quote" else "invoice"
         default_name = self.inv_no_var.get().strip() or datetime.now().strftime(
             f"{prefix}-%Y%m%d-%H%M%S"
@@ -651,30 +824,24 @@ class InvoiceBuilder(ctk.CTkFrame):
             title="Save Draft", text="Draft name (or leave blank for auto):"
         )
 
-        # Try to prefill the input field for both older and newer CTkInputDialog APIs
         try:
             entry = getattr(dialog, "entry", None) or getattr(dialog, "_entry", None)
             if entry is not None:
                 entry.delete(0, "end")
                 entry.insert(0, default_name)
         except Exception:
-            # If anything goes wrong, just continue without prefill
             pass
 
         name = dialog.get_input()
         if name is None:
-            return  # user cancelled
+            return
 
         path = save_draft(self.get_state(), name.strip() or None)
 
         toast = ctk.CTkToplevel(self)
         toast.title("Saved")
-        ctk.CTkLabel(toast, text=f"Saved draft:\n{path.name}").pack(
-            padx=16, pady=16
-        )
-        toast.geometry(
-            "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
-        )
+        ctk.CTkLabel(toast, text=f"Saved draft:\n{path.name}").pack(padx=16, pady=16)
+        toast.geometry("+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80))
         toast.after(1600, toast.destroy)
 
     def on_load(self):
@@ -682,20 +849,14 @@ class InvoiceBuilder(ctk.CTkFrame):
         if not drafts:
             toast = ctk.CTkToplevel(self)
             toast.title("No drafts")
-            ctk.CTkLabel(toast, text="No saved drafts found.").pack(
-                padx=16, pady=16
-            )
-            toast.geometry(
-                "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
-            )
+            ctk.CTkLabel(toast, text="No saved drafts found.").pack(padx=16, pady=16)
+            toast.geometry("+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80))
             toast.after(1600, toast.destroy)
             return
 
         win = ctk.CTkToplevel(self)
         win.title("Open Draft")
         win.geometry("420x320")
-
-        # keep this window on top of the main one
         win.transient(self.winfo_toplevel())
         win.grab_set()
 
@@ -705,9 +866,7 @@ class InvoiceBuilder(ctk.CTkFrame):
         for d in drafts:
             row = ctk.CTkFrame(frame, corner_radius=8)
             row.pack(fill="x", padx=4, pady=6)
-            ctk.CTkLabel(row, text=d["name"]).pack(
-                side="left", padx=10, pady=10
-            )
+            ctk.CTkLabel(row, text=d["name"]).pack(side="left", padx=10, pady=10)
             ctk.CTkButton(
                 row,
                 text="Open",
@@ -715,11 +874,8 @@ class InvoiceBuilder(ctk.CTkFrame):
                 command=lambda p=d["path"]: (self.load_from_path(p), win.destroy()),
             ).pack(side="right", padx=8, pady=8)
 
-        # center-ish
         win.update_idletasks()
-        win.geometry(
-            "+%d+%d" % (self.winfo_rootx() + 140, self.winfo_rooty() + 120)
-        )
+        win.geometry("+%d+%d" % (self.winfo_rootx() + 140, self.winfo_rooty() + 120))
 
     def load_from_path(self, path):
         state = load_draft(path)
@@ -730,7 +886,6 @@ class InvoiceBuilder(ctk.CTkFrame):
     # PDF PREVIEW / EXPORT
     # ------------------------------------------------------------------
     def on_preview_pdf(self):
-        """Render current invoice/quote to a temporary PDF and open it."""
         state = self.get_state()
         settings = load_settings() or {}
 
@@ -763,7 +918,6 @@ class InvoiceBuilder(ctk.CTkFrame):
 
         generate_invoice_pdf(state, settings, path)
 
-        # bump the correct sequence in settings
         doc_type = state.get("doc_type", "invoice")
         try:
             num = int(state["meta"]["number"] or "0")
@@ -774,27 +928,24 @@ class InvoiceBuilder(ctk.CTkFrame):
             base = int(settings.get("invoice_seq", 1000))
             next_seq = max(base, num) + 1
             settings["invoice_seq"] = next_seq
-        else:  # quote
+        else:
             base = int(settings.get("quote_seq", 1000))
             next_seq = max(base, num) + 1
             settings["quote_seq"] = next_seq
 
         save_settings(settings)
-        self.inv_no_var.set(str(next_seq))  # preload for next doc of this type
+        self.inv_no_var.set(str(next_seq))
 
         toast = ctk.CTkToplevel(self)
         toast.title("Exported")
         ctk.CTkLabel(toast, text=f"Saved: {path}").pack(padx=16, pady=16)
-        toast.geometry(
-            "+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80)
-        )
+        toast.geometry("+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 80))
         toast.after(1600, toast.destroy)
 
     # ------------------------------------------------------------------
     # FILE OPEN
     # ------------------------------------------------------------------
     def _open_file(self, path: str):
-        """Open a file with the default system viewer."""
         try:
             if sys.platform.startswith("win"):
                 os.startfile(path)  # type: ignore[attr-defined]
